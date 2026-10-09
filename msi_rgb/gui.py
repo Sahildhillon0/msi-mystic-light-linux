@@ -5,6 +5,7 @@ Front end for the same OpenRGB SDK client the `msirgb` CLI uses.
 Requires PyGObject with GTK4; no other third-party packages.
 """
 
+import sys
 import threading
 import time
 
@@ -463,10 +464,80 @@ class RGBApp(Gtk.Application):
         win.present()
 
 
+def _self_test():
+    """Prove the panel constructs, sizes zones and opens the colour picker.
+
+    Constructing the window is not enough -- the picker bug only appeared when
+    the button was pressed. So this clicks the real button rather than calling
+    the handler directly, which is what let two broken versions of
+    _pick_color() pass an earlier check.
+
+    Needs a display, since the picker dialog is parented to a mapped window.
+
+    Run with:  msirgb-gui --self-test
+    """
+    results = {}
+
+    class _App(Gtk.Application):
+        def do_activate(self):                      # noqa: N802 (GTK API)
+            win = RGBWindow(self)
+            # The picker needs a mapped window to parent its dialog to, so the
+            # window has to be on screen before the button is clicked.
+            win.present()
+
+            def find_btn(node):
+                if isinstance(node, Gtk.Button):
+                    if "Pick colour" in (node.get_label() or ""):
+                        return node
+                child = node.get_first_child()
+                while child:
+                    hit = find_btn(child)
+                    if hit:
+                        return hit
+                    child = child.get_next_sibling()
+                return None
+
+            def check():
+                results["zones"] = [win.zlabel(i)
+                                    for i in range(len(win.zones))]
+                results["leds_default"] = win.leds_spin.get_value()
+                btn = find_btn(win.get_child())
+                results["picker_button_found"] = btn is not None
+                if btn is not None:
+                    try:
+                        btn.emit("clicked")
+                        results["picker"] = "ok"
+                    except Exception as e:            # noqa: BLE001
+                        results["picker"] = f"{type(e).__name__}: {e}"
+                print("zones: " + ", ".join(results.get("zones", [])))
+                print(f"leds default: {results.get('leds_default')}")
+                print(f"picker button found: {results.get('picker_button_found')}")
+                print(f"picker: {results.get('picker', 'NOT REACHED')}")
+                # Closing the window from inside its own signal handler can
+                # upset GTK's surface teardown, so let the loop exit on its own
+                # rather than destroying it here.
+                self.quit()
+                return False
+
+            GLib.timeout_add(1200, check)
+
+    app = _App()
+    app.run([])
+    ok = results.get("picker") == "ok"
+    if not ok:
+        print("SELF-TEST FAILED: "
+              f"{results.get('picker', 'picker never reached')}")
+    return 0 if ok else 1
+
+
 def main(argv=None):
-    return RGBApp().run(argv or [])
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if "--self-test" in argv:
+        print("self-test: constructs the panel, reads zones, and clicks the "
+              "colour picker.")
+        return _self_test()
+    return RGBApp().run(argv)
 
 
 if __name__ == "__main__":
-    import sys
     sys.exit(main())
