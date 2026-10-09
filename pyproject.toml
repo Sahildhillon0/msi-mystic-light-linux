@@ -1,0 +1,46 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "msi-mystic-light-linux"
+version = "0.1.0"
+description = "Control MSI Mystic Light motherboard RGB (case fans, cooler, GPU) from Linux"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.8"
+keywords = ["msi", "mystic-light", "rgb", "argb", "openrgb", "motherboard"]
+classifiers = [
+    "Environment :: X11 Applications :: GTK",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Topic :: System :: Hardware",
+]
+
+# No runtime dependencies: the SDK client is standard library only.
+# The GTK panel needs PyGObject with GTK4, which must already be present
+# (there is no pure-Python fallback).
+dependencies = []
+
+[project.optional-dependencies]
+gui = ["PyGObject>=3.40"]
+
+[project.scripts]
+msirgb = "msi_rgb.cli:main"
+msirgb-gui = "msi_rgb.gui:main"
+
+[project.urls]
+Homepage = "https://github.com/Sahildhillon0/msi-mystic-light-linux"
+Issues = "https://github.com/Sahildhillon0/msi-mystic-light-linux/issues"
+
+[tool.setuptools]
+packages = ["msi_rgb"]
+include-package-data = true
+
+[tool.setuptools.package-data]
+msi_rgb = ["spoof/*.c"]
+
+[tool.flake8]
+max-line-length = 88
