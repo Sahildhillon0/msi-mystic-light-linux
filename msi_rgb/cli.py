@@ -9,16 +9,23 @@ Usage:
   msirgb zone 3 --color ff0000 --color 0000ff   # alternate per LED
   msirgb zone 3 --leds 9 --color 00ff00
   msirgb rainbow --zone 3                       # animated
+  msirgb effects                                # list animations
+  msirgb effect aurora --zone 3 --speed 0.6     # run one in the foreground
+  msirgb profile Calm                           # apply a profile and keep it
+  msirgb play                                   # restore the saved lighting
   msirgb off
 """
 
 import argparse
+import signal
 import sys
+import time
 
 from .color import DEFAULT_LEDS, cycle, hex_to_rgb, rainbow_gradient, rgb_to_hex
 from .config import (CONFIG_PATH, KNOWN_BOARDS, load_config, read_dmi_board_name,
                      write_example_config, zone_label)
 from .sdk import OpenRGB, SDKError
+from . import effects, runtime, state
 
 
 def cmd_doctor():
@@ -219,6 +226,114 @@ def cmd_rainbow(api, dev_id, dev, args):
     return 0
 
 
+def cmd_effects():
+    width = max(len(e.id) for e in effects.EFFECTS)
+    for e in effects.EFFECTS:
+        kind = "animated" if e.animated else "static  "
+        print(f"  {e.id:<{width}}  {kind}  {e.name}: {e.blurb}")
+    return 0
+
+
+def run_lighting(lighting, wait=60.0, once=False):
+    """Drive the board with ``lighting`` until interrupted.
+
+    Static lighting is pushed once and the call returns; anything animated
+    keeps this process running, which is the whole point of ``play``.
+    """
+    from .engine import Engine
+
+    errors = []
+    eng = Engine(on_status=lambda ok, msg: None if ok else errors.append(msg),
+                 connect_timeout=wait)
+    eng.start()
+    if not eng.ready.wait(wait):
+        eng.stop()
+        print(f"error: {errors[-1] if errors else 'OpenRGB server not ready'}",
+              file=sys.stderr)
+        return 2
+
+    animated = False
+    eng.set_master(lighting.master)
+    for zi, z in enumerate(eng.zones):
+        layer = lighting.layer_for((z["name"] or "").strip())
+        if layer is None:
+            continue
+        eng.set_layer(zi, layer)
+        animated |= layer.fx.animated
+
+    if once or not animated:
+        # Let the pump push the static frames, then leave.
+        for _ in range(40):
+            if not eng._dirty:
+                break
+            time.sleep(0.05)
+        time.sleep(0.2)
+        eng.stop()
+        eng.join(2)
+        return 0
+
+    stop = []
+    signal.signal(signal.SIGTERM, lambda *_: stop.append(1))
+    runtime.write_pidfile()
+    try:
+        while not stop and eng.is_alive():
+            time.sleep(0.25)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        runtime.remove_pidfile()
+        eng.stop()
+        eng.join(2)
+    return 0
+
+
+def cmd_play(args):
+    lighting, _settings, active = state.load_lighting()
+    if args.profile:
+        profiles = state.all_profiles()
+        if args.profile not in profiles:
+            print(f"error: no profile {args.profile!r}. Have: "
+                  + ", ".join(profiles), file=sys.stderr)
+            return 1
+        lighting = profiles[args.profile]
+        state.save_lighting(lighting, profile=args.profile)
+    if not lighting.zones:
+        print("nothing saved yet -- set something up in msirgb-gui first")
+        return 0
+    return run_lighting(lighting, wait=args.wait)
+
+
+def cmd_effect(args):
+    fx = effects.BY_ID.get(args.name)
+    if fx is None:
+        print(f"error: no effect {args.name!r}; see `msirgb effects`",
+              file=sys.stderr)
+        return 1
+    layer = state.Layer(fx.id, list(args.color) if args.color else None,
+                        args.speed, args.brightness, args.reverse,
+                        args.leds or 0)
+    key = "*"
+    if args.zone is not None:
+        key = None
+    lighting = state.Lighting({key: layer} if key else {})
+    if key is None:
+        # Zones are keyed by name; resolve the index once we can see them.
+        api = OpenRGB()
+        try:
+            api.handshake()
+            api.load_devices()
+            zones = api.devices[0]["zones"] if api.devices else []
+        finally:
+            api.close()
+        if not 0 <= args.zone < len(zones):
+            print(f"error: no zone {args.zone}", file=sys.stderr)
+            return 1
+        lighting.zones[(zones[args.zone]["name"] or "").strip()] = layer
+    print(f"{fx.name} on {'zone %d' % args.zone if key is None else 'every zone'}"
+          + (" -- Ctrl-C to stop" if fx.animated else ""), flush=True)
+    return run_lighting(lighting, wait=5.0)
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(
         prog="msirgb", description="Control MSI Mystic Light RGB via OpenRGB.")
@@ -258,12 +373,68 @@ def main(argv=None):
 
     sub.add_parser("off", help="turn every zone off")
 
+    sub.add_parser("effects", help="list the available effects")
+
+    e = sub.add_parser("effect", help="run one effect in the foreground")
+    e.add_argument("name", help="effect id, see `msirgb effects`")
+    e.add_argument("--zone", type=int, help="only this zone (default: all)")
+    e.add_argument("--color", type=hexcolor, action="append",
+                   help="RRGGBB, repeat for more (default: the effect's own)")
+    e.add_argument("--speed", type=float, default=1.0,
+                   help="speed multiplier, 1 = normal")
+    e.add_argument("--brightness", type=int, default=100, help="0..100")
+    e.add_argument("--reverse", action="store_true", help="run backwards")
+    e.add_argument("--leds", type=int, help="LEDs in the zone")
+
+    pl = sub.add_parser("play", help="restore the saved lighting "
+                        "(keeps running while anything is animated)")
+    pl.add_argument("--profile", help="apply this profile instead")
+    pl.add_argument("--wait", type=float, default=60.0,
+                    help="seconds to wait for the OpenRGB server")
+
+    pr = sub.add_parser("profile", help="list profiles, or apply one")
+    pr.add_argument("name", nargs="?")
+
     args = p.parse_args(argv)
     cfg = load_config()
     labels = cfg["zone_labels"]
 
     if args.cmd == "doctor":
         return cmd_doctor()
+    if args.cmd == "effects":
+        return cmd_effects()
+    if args.cmd == "play":
+        return cmd_play(args)
+    if args.cmd == "profile" and not args.name:
+        active = state.load_lighting()[2]
+        for name in state.all_profiles():
+            tag = "built-in" if name in state.BUILTIN_PROFILES else "saved"
+            print(f"  {'*' if name == active else ' '} {name:<20} {tag}")
+        return 0
+
+    # Everything below writes to the board; a background player would
+    # immediately paint over it, so take the board back first.
+    runtime.stop_background()
+
+    if args.cmd == "profile":
+        profiles = state.all_profiles()
+        if args.name not in profiles:
+            print(f"error: no profile {args.name!r}. Have: "
+                  + ", ".join(profiles), file=sys.stderr)
+            return 1
+        lighting = profiles[args.name]
+        state.save_lighting(lighting, profile=args.name)
+        if any(l.fx.animated for l in lighting.zones.values()):
+            # Hand it to the background player so the shell is not held.
+            runtime.start_background()
+            print(f"{args.name}: running in the background")
+            return 0
+        rc = run_lighting(lighting, wait=10.0)
+        if rc == 0:
+            print(f"{args.name}: applied")
+        return rc
+    if args.cmd == "effect":
+        return cmd_effect(args)
 
     try:
         api = OpenRGB()
@@ -295,6 +466,9 @@ def main(argv=None):
             args.mode, args.leds = None, None
             args.speed, args.brightness = None, None
             targets = range(len(dev["zones"]))
+            # Make "off" what comes back at login, too.
+            state.save_lighting(state.Lighting(
+                {"*": state.Layer("static", [(0, 0, 0)])}), profile=None)
         elif args.cmd == "zone":
             if not 0 <= args.index < len(dev["zones"]):
                 raise SDKError(f"no zone {args.index} "

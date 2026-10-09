@@ -241,6 +241,7 @@ class OpenRGB:
             name = r.s()
             value = r.u32() if self.proto < 6 else 0
             d["leds"].append({"name": name, "value": value})
+        d["colors"] = r.colors(r.u16())
         return d
 
     # -- control ---------------------------------------------------------
@@ -252,6 +253,22 @@ class OpenRGB:
         body = struct.pack("<i", mode_idx) + build_mode(self.proto, mode)
         payload = struct.pack("<I", len(body) + 4) + body
         self.send(dev, PKT_RGBCONTROLLER_UPDATEMODE, payload)
+
+    def update_leds(self, dev, colors):
+        """Set every LED on the device in one packet.
+
+        Prefer this for animation. OpenRGB only flags the controller for an
+        update and returns, and its update thread writes whatever is newest,
+        so frames sent faster than the hardware can take are dropped rather
+        than queued. ``update_zone_leds`` instead writes to the device before
+        the server reads the next packet (~20 ms each on the MSI controller),
+        so a stream of them builds a backlog that delays every later change.
+        ``colors`` must cover all LEDs, zones in order.
+        """
+        body = struct.pack("<H", len(colors)) + b"".join(
+            struct.pack("<BBBB", r, g, b, 0) for r, g, b in colors)
+        self.send(dev, PKT_RGBCONTROLLER_UPDATELEDS,
+                  struct.pack("<I", len(body) + 4) + body)
 
     def update_zone_leds(self, dev, zone, colors):
         body = struct.pack("<IH", zone, len(colors))

@@ -9,7 +9,7 @@ The protocol knowledge here comes from reading OpenRGB's source, which is
 GPL-3.0; this package is MIT-licensed and credits it.
 """
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 from .sdk import OpenRGB, SDKError      # noqa: F401
 

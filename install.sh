@@ -122,9 +122,14 @@ mkdir -p "$UNITDIR"
 sed -e "s|@LIBDIR@|$LIBDIR|g" \
     -e "s|@SPOOF@|$SPOOF|g" \
     "$SRC/systemd/openrgb-msi.service.in" > "$UNITDIR/openrgb-msi.service"
+sed -e "s|@BINDIR@|$BINDIR|g" \
+    "$SRC/systemd/msirgb-lighting.service.in" > "$UNITDIR/msirgb-lighting.service"
 systemctl --user daemon-reload
 systemctl --user enable --now openrgb-msi.service
 say "enabled at login (systemctl --user status openrgb-msi)"
+# Not --now: the panel may be open, and two writers make the LEDs flicker.
+systemctl --user enable msirgb-lighting.service
+say "lighting restored at login (systemctl --user status msirgb-lighting)"
 
 sleep 2
 if [ "$WITH_GUI" = "1" ]; then
@@ -147,10 +152,13 @@ From a terminal:
   msirgb doctor          # confirm OpenRGB can see the board
   msirgb list            # zones and LED counts
   msirgb zone 3 --color ff0000
-  msirgb rainbow --zone 3 --period 20
+  msirgb effects                     # list the animations
+  msirgb effect aurora --zone 3      # run one in the foreground
+  msirgb profile Calm                # apply a profile (keeps running)
   msirgb off
 
-The server starts automatically at login.
+The server starts automatically at login, and your last lighting
+(animations included) is put back by msirgb-lighting.service.
   systemctl --user status openrgb-msi
 EOF
 

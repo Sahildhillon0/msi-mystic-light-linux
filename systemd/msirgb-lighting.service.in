@@ -1,0 +1,17 @@
+[Unit]
+Description=MSI Mystic Light: restore the saved lighting and keep effects running
+Documentation=https://github.com/Sahildhillon0/msi-mystic-light-linux
+After=openrgb-msi.service
+Wants=openrgb-msi.service
+
+[Service]
+Type=simple
+# Puts back what the panel last showed. Exits straight away for still
+# lighting; stays running while any zone is animated, since the board cannot
+# animate on its own. The panel stops this unit while it is open.
+ExecStart=@BINDIR@/msirgb play
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

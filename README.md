@@ -48,8 +48,8 @@ the HID device directly for writes.
 
 ```
 msirgb-gui  ─┐
-             ├─▶ OpenRGB SDK (127.0.0.1:6742) ─▶ openrgb --server ─▶ MSI controller
-msirgb CLI ─┘         (LD_PRELOAD shim)              (USB HID)
+msirgb play ─┼─▶ effects engine ─▶ OpenRGB SDK ─▶ openrgb --server ─▶ MSI controller
+msirgb CLI  ─┘     (~30 fps)      127.0.0.1:6742   (LD_PRELOAD shim)    (USB HID)
 ```
 
 ## Install
@@ -74,12 +74,32 @@ msirgb list          # zones, LED counts
 ## Using it
 
 The panel is the main interface. Search **MSI Mystic Light** in your app
-launcher, or run `msirgb-gui`.
+launcher, or run `msirgb-gui`. It is laid out like Logitech G HUB's lighting
+page:
 
-It has a zone picker (labelled with what each header is actually wired to), a
-colour chooser, preset swatches, per-zone LED count, and a rainbow
-start/stop with a period slider. Colours you pick stack up as chips and cycle
-across the zone's LEDs, so two or more give you a gradient.
+- **Zones** down the left, each labelled with what the header is wired to and
+  showing a live mini preview. *Sync all zones* makes every edit apply
+  everywhere; *Master brightness* scales the lot.
+- **A live preview** of the selected zone across the top. It draws the same
+  frames, from the same clock, that are being sent to the board.
+- **Presets**: solid colours, still gradients and a few animated looks.
+- **Animations**: 17 effects, each card animating so you can see what you are
+  picking — Rainbow wave, Colour cycle, Colour wave, Breathing, Colour fade,
+  Aurora, Comet, Meteor shower, Scanner, Theatre chase, Starlight, Ripple,
+  Heartbeat, Fire, Candle, Strobe, Police. Speed, direction, colours and zone
+  brightness sit in the panel on the right.
+- **Freestyle**: click or drag across the LEDs in the preview to paint them one
+  at a time, with fill, alternate and rainbow tools.
+- **Profiles** at the top: six built in (Gaming, Calm, Focus, Night, Cyberpunk,
+  Lights off), plus any you save. They are stored in
+  `~/.config/msi-rgb/profiles.json`.
+
+**Lighting survives closing the panel and rebooting.** The board cannot animate
+by itself, so something has to keep sending frames. When the panel closes with
+an effect running it hands over to `msirgb play` in the background, and the
+`msirgb-lighting` user unit runs the same thing at login. Turn the hand-over
+off in the panel's settings (gear icon). Your current lighting is saved to
+`~/.config/msi-rgb/lighting.json`.
 
 From a terminal:
 
@@ -101,11 +121,20 @@ msirgb rainbow --zone 3 --sat 0.4     # pastel
 msirgb off                            # everything dark
 ```
 
-To keep a rainbow running after you close the terminal:
+Effects and profiles from the CLI:
 
 ```bash
-nohup msirgb rainbow --zone 3 --period 30 >/dev/null 2>&1 &
+msirgb effects                                  # list them all
+msirgb effect aurora --zone 3 --speed 0.6       # foreground, Ctrl-C to stop
+msirgb effect comet --color ff0040 --color 00b8fc --reverse
+msirgb profile                                  # list profiles
+msirgb profile Calm                             # apply; animated ones keep
+                                                # running in the background
+msirgb play                                     # put the saved lighting back
 ```
+
+Only one program can drive the LEDs at a time, or they flicker between the two.
+The panel and the commands that set colours stop the background player first.
 
 `install.sh` offers to open the panel when it finishes.
 
