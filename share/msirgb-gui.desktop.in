@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=MSI Mystic Light
+GenericName=RGB Lighting Control
+Comment=Control MSI Mystic Light case fans, cooler and GPU colours
+Exec=@BINDIR@/msirgb-gui
+Icon=msi-mystic-light
+Terminal=false
+Categories=System;Settings;HardwareSettings;Utility;
+Keywords=rgb;argb;lighting;fans;msi;mystic;colour;color;
+StartupNotify=true
+StartupWMClass=@WMCLASS@

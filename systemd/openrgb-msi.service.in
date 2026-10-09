@@ -2,6 +2,9 @@
 Description=OpenRGB SDK server for MSI Mystic Light (DMI board-name shim)
 Documentation=https://gitlab.com/CalcProgrammer1/OpenRGB
 After=graphical-session.target
+# The GUI needs the server, so start it as soon as the session is up rather
+# than waiting for a login prompt to reference it.
+PartOf=graphical-session.target
 
 [Service]
 Type=simple

@@ -70,32 +70,52 @@ echo "==> Board"
 say "reports as : $BOARD"
 say "spoofed as: $SPOOF"
 
+echo "==> Installing the package"
+# Copy next to the shim so the launchers below keep working if the repo moves.
+mkdir -p "$LIBDIR/msi_rgb/spoof"
+cp -r "$SRC/msi_rgb/." "$LIBDIR/msi_rgb/"
+
 echo "==> Installing commands"
 mkdir -p "$BINDIR"
-# Console scripts via the package's own entry points, without pip: a tiny
-# launcher keeps the package importable from anywhere.
+# Console scripts without pip: a tiny launcher keeps the package importable
+# from anywhere. Both point at $LIBDIR, not the checkout, so the repo can be
+# deleted after installing.
 cat > "$BINDIR/msirgb" <<EOF
 #!/usr/bin/env python3
-import os, sys
-sys.path.insert(0, os.path.join("$LIBDIR"))
-sys.path.insert(0, "$SRC")
+import sys
+sys.path.insert(0, "$LIBDIR")
 from msi_rgb.cli import main
 sys.exit(main())
 EOF
 cat > "$BINDIR/msirgb-gui" <<EOF
 #!/usr/bin/env python3
-import os, sys
-sys.path.insert(0, "$SRC")
+import sys
+sys.path.insert(0, "$LIBDIR")
 from msi_rgb.gui import main
 sys.exit(main())
 EOF
 chmod +x "$BINDIR/msirgb" "$BINDIR/msirgb-gui"
 say "$BINDIR/msirgb"
+say "$BINDIR/msirgb-gui"
 
-# Keep the package next to the shim so the launcher above stays valid even if
-# the repo is moved.
-mkdir -p "$LIBDIR/msi_rgb/spoof"
-cp -r "$SRC/msi_rgb/." "$LIBDIR/msi_rgb/"
+echo "==> Installing the app launcher entry"
+APPDIR="$HOME/.local/share/applications"
+ICONDIR="$HOME/.local/share/icons/hicolor/scalable/apps"
+ICONDIR_H="$HOME/.local/share/icons/hicolor/256x256/apps"
+mkdir -p "$APPDIR" "$ICONDIR" "$ICONDIR_H"
+python3 "$SRC/tools/make-icon.py" "$ICONDIR/msi-mystic-light.svg" >/dev/null
+python3 "$SRC/tools/make-icon.py" "$ICONDIR_H/msi-mystic-light.svg" >/dev/null
+
+WMCLASS="$(grep -oP '^APP_ID\s*=\s*"\K[^"]+' "$SRC/msi_rgb/gui.py" || true)"
+sed -e "s|@BINDIR@|$BINDIR|g" \
+    -e "s|@WMCLASS@|${WMCLASS:-msirgb-gui}|g" \
+    "$SRC/share/msirgb-gui.desktop.in" > "$APPDIR/msi-mystic-light.desktop"
+chmod +x "$APPDIR/msi-mystic-light.desktop"
+
+if command -v update-desktop-database >/dev/null; then
+    update-desktop-database "$APPDIR" 2>/dev/null || true
+fi
+say "MSI Mystic Light (find it in your app launcher)"
 
 echo "==> Installing the systemd user unit"
 mkdir -p "$UNITDIR"
@@ -117,10 +137,30 @@ fi
 
 cat <<EOF
 
-Done. Try:
+Done.
+
+Open the panel:      search "MSI Mystic Light" in your app launcher
+                     (or run: msirgb-gui)
+
+From a terminal:
 
   msirgb doctor          # confirm OpenRGB can see the board
   msirgb list            # zones and LED counts
   msirgb zone 3 --color ff0000
   msirgb rainbow --zone 3 --period 20
+  msirgb off
+
+The server starts automatically at login.
+  systemctl --user status openrgb-msi
 EOF
+
+if [ "$WITH_GUI" = "1" ] && [ "${MSI_RGB_NO_LAUNCH:-0}" != "1" ]; then
+    if python3 -c 'import gi; gi.require_version("Gtk","4.0")' 2>/dev/null; then
+        echo
+        read -r -p "Open the panel now? [Y/n] " reply </dev/tty || reply=y
+        case "${reply:-y}" in
+            [Yy]*|"") nohup "$BINDIR/msirgb-gui" >/dev/null 2>&1 &
+                   say "panel launched" ;;
+        esac
+    fi
+fi

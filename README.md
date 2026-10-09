@@ -71,7 +71,17 @@ msirgb doctor        # does OpenRGB see the board?
 msirgb list          # zones, LED counts
 ```
 
-## Usage
+## Using it
+
+The panel is the main interface. Search **MSI Mystic Light** in your app
+launcher, or run `msirgb-gui`.
+
+It has a zone picker (labelled with what each header is actually wired to), a
+colour chooser, preset swatches, per-zone LED count, and a rainbow
+start/stop with a period slider. Colours you pick stack up as chips and cycle
+across the zone's LEDs, so two or more give you a gradient.
+
+From a terminal:
 
 ```bash
 # a zone solid
@@ -97,8 +107,7 @@ To keep a rainbow running after you close the terminal:
 nohup msirgb rainbow --zone 3 --period 30 >/dev/null 2>&1 &
 ```
 
-The GUI (`msirgb-gui`) offers the same controls with a colour chooser, preset
-swatches, a zone picker, and a rainbow start/stop with a period slider.
+`install.sh` offers to open the panel when it finishes.
 
 ## Zones
 
