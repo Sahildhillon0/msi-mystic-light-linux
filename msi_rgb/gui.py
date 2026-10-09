@@ -315,11 +315,10 @@ class RGBWindow(Gtk.ApplicationWindow):
 
     def _pick_color(self):
         dialog = Gtk.ColorDialog()
-        start = Gdk.RGBA()
-        start.red, start.green, start.blue = (
-            (c / 255.0 for c in self.colors[-1]))
-        start.alpha = 1.0
-        dialog.set_with_rgba(start)
+        # Gtk.ColorDialog has no set_with_rgba(); set_with_alpha() only controls
+        # whether the picker shows an alpha channel. The starting colour is not
+        # configurable in GTK 4.22, so the dialog always opens on its default.
+        dialog.set_with_alpha(False)
 
         def done(dlg, result):
             try:
