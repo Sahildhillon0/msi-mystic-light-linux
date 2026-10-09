@@ -159,6 +159,17 @@ systemctl --user restart openrgb-msi
 A board whose zone set differs from the one you impersonate will mis-map zones.
 Verify with one colour per zone before trusting a long animation.
 
+## LED counts
+
+A zone has to be told how many LEDs are on it before colours mean anything —
+zones start at 0. **Undersizing leaves part of your hardware dark**: a fan or
+strip further along the header simply gets no address.
+
+Addresses *past* the end of the hardware are ignored, so oversizing costs
+nothing. Both front ends therefore default to **30 LEDs** per zone, which covers
+a full ARGB header of RGB fans plus a GPU and an AIO cooler on one board. Lower
+it in the panel's "LEDs in zone" field if you want to be exact.
+
 ## Limitations
 
 Worth knowing before you rely on it:
@@ -169,7 +180,7 @@ Worth knowing before you rely on it:
   and the LEDs freeze on the last frame.
 - **The board's own onboard LEDs go dark.** They are not in the zone set OpenRGB
   uses for this board, and OpenRGB takes over the lighting configuration.
-- **A wrong `--leds` value misaligns gradients** against the physical fans.
+- **A too-low LED count silently leaves hardware unlit** — see above.
 - OpenRGB's own CLI cannot parse options that take a value in some builds, which
   is why this talks to the SDK directly.
 
