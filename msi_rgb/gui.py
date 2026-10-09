@@ -13,7 +13,8 @@ gi.require_version("Gtk", "4.0")
 gi.require_version("Gdk", "4.0")
 from gi.repository import Gdk, GLib, Gtk
 
-from .color import PRESETS, cycle, hex_to_rgb, rainbow_gradient, rgb_to_hex
+from .color import (DEFAULT_LEDS, PRESETS, cycle, hex_to_rgb, rainbow_gradient,
+                   rgb_to_hex)
 from .config import default_zone_index, load_config, zone_label
 from .sdk import OpenRGB, SDKError
 
@@ -287,7 +288,9 @@ class RGBWindow(Gtk.ApplicationWindow):
         idx = self.zone_dd.get_selected()
         if 0 <= idx < len(self.zones):
             z = self.zones[idx]
-            n = z["leds_count"] or 12
+            # A zone reports 0 LEDs until ResizeZone has been called, which is
+            # not a value the user would ever want, so fall back to the default.
+            n = z["leds_count"] or DEFAULT_LEDS
             self.leds_spin.set_range(1, max(z["leds_max"], 1))
             self.leds_spin.set_value(max(1, min(n, z["leds_max"])))
         self._render_chips()
@@ -315,10 +318,15 @@ class RGBWindow(Gtk.ApplicationWindow):
 
     def _pick_color(self):
         dialog = Gtk.ColorDialog()
-        # Gtk.ColorDialog has no set_with_rgba(); set_with_alpha() only controls
-        # whether the picker shows an alpha channel. The starting colour is not
-        # configurable in GTK 4.22, so the dialog always opens on its default.
+        # GTK 4.22's ColorDialog has no set_with_rgba(); set_with_alpha() only
+        # controls whether an alpha channel is shown. The opening colour is
+        # passed to choose_rgba() instead, seeded from the newest chip.
         dialog.set_with_alpha(False)
+
+        r, g, b = (c / 255.0 for c in (self.colors[-1] if self.colors
+                                       else (255, 59, 48)))
+        start = Gdk.RGBA()
+        start.red, start.green, start.blue, start.alpha = r, g, b, 1.0
 
         def done(dlg, result):
             try:
@@ -328,7 +336,8 @@ class RGBWindow(Gtk.ApplicationWindow):
             self._add_color((int(rgba.red * 255), int(rgba.green * 255),
                              int(rgba.blue * 255)))
 
-        dialog.choose_rgba(self, None, done)
+        # choose_rgba(self, parent, initial_color, cancellable, callback)
+        dialog.choose_rgba(self, start, None, done)
 
     def _render_chips(self):
         child = self.chip_box.get_first_child()

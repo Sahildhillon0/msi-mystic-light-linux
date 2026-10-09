@@ -35,6 +35,14 @@ def hsv_to_rgb(h, s=1.0, v=1.0):
     return (int((r + m) * 255), int((g + m) * 255), int((b + m) * 255))
 
 
+# Default LEDs to request when a zone has not been sized yet. It has to be
+# generous: the controller addresses up to 240 LEDs per zone, addresses past
+# the end of the hardware are ignored, and *undersizing* is what leaves part of
+# a strip or fan dark. 30 covers a full ARGB header of RGB fans plus a GPU and
+# a CPU cooler sharing the same board.
+DEFAULT_LEDS = 30
+
+
 def rainbow_gradient(leds, offset=0.0, sat=1.0, val=1.0):
     """One frame of a hue gradient spanning `leds` LEDs."""
     if leds <= 0:

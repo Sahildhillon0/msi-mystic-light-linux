@@ -15,7 +15,7 @@ Usage:
 import argparse
 import sys
 
-from .color import cycle, hex_to_rgb, rainbow_gradient, rgb_to_hex
+from .color import DEFAULT_LEDS, cycle, hex_to_rgb, rainbow_gradient, rgb_to_hex
 from .config import (CONFIG_PATH, KNOWN_BOARDS, load_config, read_dmi_board_name,
                      write_example_config, zone_label)
 from .sdk import OpenRGB, SDKError
@@ -134,7 +134,12 @@ def apply_zone(api, dev_id, dev, zi, args):
     if leds > zone["leds_max"]:
         raise SDKError(
             f"zone {zi} ({zone['name']}) allows at most {zone['leds_max']} LEDs")
-    if args.leds is not None and leds != zone["leds_count"]:
+    # Undersizing is what leaves part of a strip or fan dark. Addresses past
+    # the end of the hardware are ignored, so oversizing is harmless -- so when
+    # the caller did not ask for a specific count, size the zone generously.
+    if args.leds is None and leds < DEFAULT_LEDS:
+        leds = min(DEFAULT_LEDS, zone["leds_max"])
+    if leds != zone["leds_count"]:
         api.resize_zone(dev_id, zi, leds)
         print(f"  resized zone {zi} -> {leds} LEDs")
 
