@@ -94,12 +94,29 @@ def _load_hidapi():
         lib.hid_open_path.restype = ctypes.c_void_p
         lib.hid_open_path.argtypes = [ctypes.c_char_p]
         lib.hid_close.argtypes = [ctypes.c_void_p]
+        lib.hid_error.restype = ctypes.c_wchar_p
+        lib.hid_error.argtypes = [ctypes.c_void_p]
+        lib.loaded_from = name
         for fn in (lib.hid_send_feature_report, lib.hid_get_feature_report):
             fn.restype = ctypes.c_int
             fn.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_size_t]
         lib.hid_init()
         return lib
     raise SDKError("hidapi library not found (" + "; ".join(errors) + ")")
+
+
+def hid_error(lib, dev=None):
+    """hidapi's text for the last failure (``dev=None``: the last open)."""
+    try:
+        return lib.hid_error(dev) or ""
+    except (AttributeError, OSError, ValueError):
+        return ""
+
+
+# On Windows a feature-report read must be given a buffer of the collection's
+# full feature length (761 here), or the HID class driver rejects it before
+# anything reaches the board. Linux takes the exact sizes OpenRGB uses.
+FEATURE_LEN = 761
 
 
 def find_paths(lib=None):
@@ -121,21 +138,24 @@ def find_paths(lib=None):
 class Direct:
     """Same surface as ``sdk.OpenRGB`` for the parts this project uses."""
 
-    def __init__(self):
+    def __init__(self, trace=None):
         self.lib = _load_hidapi()
         paths = find_paths(self.lib)
         if not paths:
             raise SDKError("no MSI Mystic Light controller (USB 0db0:0076) "
                            "found")
         self.dev = None
+        errors = []
         for path in paths:
             self.dev = self.lib.hid_open_path(path)
             if self.dev:
                 self.path = path.decode(errors="replace")
                 break
+            errors.append(hid_error(self.lib) or "no reason given")
         if not self.dev:
-            raise SDKError("found the controller but could not open it "
-                           "(is another program holding it?)")
+            raise SDKError("found the controller but could not open it: "
+                           + "; ".join(errors) + ". Close MSI Center / "
+                           "Mystic Light, SignalRGB and OpenRGB and retry.")
         self.proto = 0
         self.devices = []
         cache = self._read_cache()
@@ -144,28 +164,43 @@ class Direct:
         self.colors = [[tuple(c) for c in cache.get("colors", {}).get(z, [])]
                        for z, _, _ in ZONES]
         self._sent = [None] * len(ZONES)
-        self._init_controller()
+        try:
+            self._init_controller(trace)
+        except SDKError:
+            self.close()
+            raise
 
     # -- hidapi ------------------------------------------------------------
     def _set(self, data):
         n = self.lib.hid_send_feature_report(self.dev, bytes(data), len(data))
         if n < 0:
-            raise SDKError("HID write to the controller failed")
+            raise SDKError(f"HID write of report 0x{data[0]:02x} "
+                           f"({len(data)} bytes) failed: "
+                           f"{hid_error(self.lib, self.dev) or 'no reason given'}")
         return n
 
     def _get(self, report_id, size):
+        if sys.platform == "win32":
+            size = max(size, FEATURE_LEN)
         buf = ctypes.create_string_buffer(bytes([report_id]), size)
         n = self.lib.hid_get_feature_report(self.dev, buf, size)
         return buf.raw[:n] if n > 0 else b""
 
-    def _init_controller(self):
+    def _init_controller(self, trace=None):
         # Reads only matter to the firmware as part of the sequence; their
         # contents are not needed, and a failed read is not fatal.
-        self._get(0x52, 200)
-        self._get(0x50, 290)
-        self._set(b"\x51" + bytes(760))
-        self._get(0x51, 500)
-        self._set(CONFIG)
+        trace = trace or (lambda msg: None)
+        for step in (("get", 0x52, 200), ("get", 0x50, 290),
+                     ("set", b"\x51" + bytes(760)), ("get", 0x51, 500),
+                     ("set", CONFIG)):
+            if step[0] == "get":
+                got = self._get(step[1], step[2])
+                trace(f"GET 0x{step[1]:02x}: {len(got)} bytes"
+                      + ("" if got else
+                         f" ({hid_error(self.lib, self.dev) or 'failed'})"))
+            else:
+                n = self._set(step[1])
+                trace(f"SET 0x{step[1][0]:02x}: {n} bytes")
 
     # -- cache: the board cannot be read back, so remember what we set ----
     def _read_cache(self):

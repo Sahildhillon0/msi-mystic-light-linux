@@ -30,33 +30,110 @@ from .sdk import OpenRGB, SDKError, backend_name, connect
 from . import effects, runtime, state
 
 
+# Programs that drive the same controller and can block or fight us.
+CONFLICTS = ("LEDKeeper2.exe", "LEDKeeper.exe", "MSI.CentralServer.exe",
+             "MSI Center.exe", "MysticLight.exe", "MSI_Central_Service.exe",
+             "SignalRgb.exe", "SignalRgbLauncher.exe", "OpenRGB.exe")
+
+
+def _running_conflicts():
+    if sys.platform != "win32":
+        return []
+    import subprocess
+    try:
+        out = subprocess.run(["tasklist", "/fo", "csv", "/nh"],
+                             capture_output=True, text=True, timeout=10,
+                             creationflags=0x08000000).stdout
+    except (OSError, subprocess.SubprocessError):
+        return []
+    names = {line.split('","')[0].strip('"').lower()
+             for line in out.splitlines() if line}
+    return [c for c in CONFLICTS if c.lower() in names]
+
+
 def cmd_doctor_direct():
-    """Doctor for the direct HID backend: is the controller there and usable?"""
-    from .direct import find_paths
+    """Doctor for the direct HID backend, step by step.
+
+    Prints everything needed to tell apart: hidapi missing, no controller,
+    controller held by another program, and the board refusing a report.
+    """
+    import platform
+    from . import direct
     print("MSI Mystic Light -- diagnosis (direct HID, no OpenRGB)")
-    print("=" * 46)
+    print("=" * 54)
+    print(f"version          : {__import__('msi_rgb').__version__}")
+    print(f"system           : {platform.platform()}")
+    if sys.platform == "win32":
+        board = _win_board()
+        print(f"board (WMI)      : {board or '(could not read)'}")
+
     try:
-        paths = find_paths()
+        lib = direct._load_hidapi()
     except SDKError as e:
-        print(f"  {e}")
+        print(f"hidapi           : NOT LOADED -- {e}")
         return 2
-    if not paths:
-        print("  No MSI Mystic Light controller (USB 0db0:0076) found.")
-        print("  This build only drives the 761-byte controller used on recent")
-        print("  MSI boards (Z890, X870, B850 ...).")
+    print(f"hidapi           : {lib.loaded_from}")
+
+    # Every MSI HID device, so a different controller shows up too.
+    head = lib.hid_enumerate(0, 0)
+    node, msi = head, []
+    while node:
+        d = node.contents
+        if d.vendor_id in (0x0DB0, 0x1462):
+            msi.append(d)
+            print(f"MSI HID device   : {d.vendor_id:04x}:{d.product_id:04x} "
+                  f"usage {d.usage_page:04x}/{d.usage:02x} "
+                  f"if {d.interface_number} '{d.product_string or ''}'")
+            print(f"                   {d.path.decode(errors='replace')}")
+        node = d.next
+    if head:
+        lib.hid_free_enumeration(head)
+    if not any(d.vendor_id == direct.VID and d.product_id == direct.PID
+               for d in msi):
+        print("\nNo MSI Mystic Light controller (USB 0db0:0076) found.")
+        print("This build drives the 761-byte controller on recent MSI boards")
+        print("(Z890, X870, B850 ...). If an MSI device is listed above with")
+        print("another ID, send this output to the project.")
         return 1
-    for p in paths:
-        print(f"  found  {p.decode(errors='replace')}")
+
+    conflicts = _running_conflicts()
+    if conflicts:
+        print("running conflicts: " + ", ".join(conflicts))
+        print("                   these drive the same controller -- quit them")
+
+    runtime.stop_background()       # one writer at a time
+    print("\nOpening the controller and sending the init sequence:")
     try:
-        api = connect()
+        api = direct.Direct(trace=lambda m: print("  " + m))
         api.load_devices()
-    except (OSError, SDKError) as e:
-        print(f"  but it could not be opened: {e}")
+    except SDKError as e:
+        print(f"  FAILED: {e}")
+        return 1
+    print("  painting every zone white for 2 s ...")
+    try:
+        n = sum(z["leds_count"] for z in api.devices[0]["zones"])
+        api.update_leds(0, [(255, 255, 255)] * n)
+        time.sleep(2)
+        api.update_leds(0, [(0, 0, 0)] * n)
+    except SDKError as e:
+        print(f"  FAILED: {e}")
+        api.close()
         return 1
     api.close()
-    print("  OK -- the controller accepted the configuration packet.")
+    print("  OK -- if the fans lit white, everything works.")
     print("\nRun `msirgb list` to see the zones.")
     return 0
+
+
+def _win_board():
+    import subprocess
+    cmd = ["powershell", "-NoProfile", "-Command",
+           "(Get-CimInstance Win32_BaseBoard).Product"]
+    try:
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=15,
+                              creationflags=0x08000000).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return ""
 
 
 def cmd_doctor():

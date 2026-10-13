@@ -9,13 +9,32 @@ same zone make it flicker between them, which is why the panel stops the
 background player when it opens (see ``runtime``).
 """
 
+import os
+import pathlib
 import threading
 import time
+import traceback
 
 from .color import DEFAULT_LEDS
 from .sdk import SDKError, backend_name, connect
 
 FPS = 30
+
+LOG_PATH = pathlib.Path(os.environ.get(
+    "MSI_RGB_CONFIG_DIR", "~/.config/msi-rgb")).expanduser() / "msirgb.log"
+
+
+def log(msg):
+    """Append to msirgb.log: the windowed Windows build has no console."""
+    try:
+        LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        if LOG_PATH.exists() and LOG_PATH.stat().st_size > 256 * 1024:
+            LOG_PATH.replace(LOG_PATH.with_suffix(".log.old"))
+        with open(LOG_PATH, "a", encoding="utf-8") as fh:
+            fh.write(time.strftime("%Y-%m-%d %H:%M:%S ") + msg.rstrip()
+                     + "\n")
+    except OSError:
+        pass
 
 
 class Engine(threading.Thread):
@@ -82,6 +101,14 @@ class Engine(threading.Thread):
                 err = f"cannot reach OpenRGB server: {e}"
             except SDKError as e:
                 err = str(e)
+            except Exception as e:                  # noqa: BLE001
+                # Anything else would kill this thread and leave the panel
+                # OFFLINE with no reason shown.
+                log(traceback.format_exc())
+                err = f"{type(e).__name__}: {e}"
+            if err != getattr(self, "_last_err", None):
+                log("connect failed: " + err)
+                self._last_err = err
             if time.monotonic() >= deadline:
                 self.on_status(False, err)
                 # Keep trying quietly; the server may still be starting.
@@ -110,6 +137,9 @@ class Engine(threading.Thread):
             with self.lock:
                 self._dirty.update(self.layers)
             self.ready.set()
+            self._last_err = None
+            log(f"connected to {self.device['name']} "
+                f"({self.device.get('location', '')})")
             self.on_status(True, f"Connected to {self.device['name']}")
             try:
                 self._pump(api)
@@ -117,6 +147,7 @@ class Engine(threading.Thread):
                 self.ready.clear()
                 lost = ("the controller" if backend_name() == "direct"
                         else "the OpenRGB server")
+                log(f"lost {lost}: {e}")
                 self.on_status(False, f"lost {lost}: {e}")
                 self.stop_event.wait(2.0)
             finally:
