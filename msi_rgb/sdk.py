@@ -5,8 +5,10 @@ that the CLI and the GTK panel share one implementation.
 
 Protocol reference: OpenRGB ``Documentation/OpenRGBSDK.md``.
 """
+import os
 import socket
 import struct
+import sys
 
 HOST = "127.0.0.1"
 PORT = 6742
@@ -276,3 +278,34 @@ class OpenRGB:
             body += struct.pack("<BBBB", r, g, b, 0)
         self.send(dev, PKT_RGBCONTROLLER_UPDATEZONELEDS,
                   struct.pack("<I", len(body) + 4) + body)
+
+
+def backend_name():
+    """``openrgb`` (talk to an OpenRGB server) or ``direct`` (HID, no server).
+
+    Windows defaults to direct: OpenRGB there cannot be made to accept a board
+    missing from its name table. ``MSI_RGB_BACKEND`` overrides either way.
+    """
+    name = os.environ.get("MSI_RGB_BACKEND", "").strip().lower()
+    if name in ("openrgb", "direct"):
+        return name
+    return "direct" if sys.platform == "win32" else "openrgb"
+
+
+def connect():
+    """An OpenRGB-shaped client for the configured backend, handshake done.
+
+    Raises OSError if the OpenRGB server cannot be reached, SDKError for
+    anything else (including no controller found by the direct backend).
+    """
+    if backend_name() == "direct":
+        from .direct import Direct
+        api = Direct()
+    else:
+        api = OpenRGB()
+    try:
+        api.handshake()
+    except BaseException:
+        api.close()
+        raise
+    return api

@@ -13,7 +13,7 @@ import threading
 import time
 
 from .color import DEFAULT_LEDS
-from .sdk import OpenRGB, SDKError
+from .sdk import SDKError, backend_name, connect
 
 FPS = 30
 
@@ -72,15 +72,16 @@ class Engine(threading.Thread):
         deadline = time.monotonic() + self.connect_timeout
         while not self.stop_event.is_set():
             try:
-                api = OpenRGB()
-                api.handshake()
+                api = connect()
                 api.load_devices()
                 if api.devices:
                     return api
                 api.close()
                 err = "OpenRGB sees no devices (run `msirgb doctor`)"
-            except (OSError, SDKError) as e:
+            except OSError as e:
                 err = f"cannot reach OpenRGB server: {e}"
+            except SDKError as e:
+                err = str(e)
             if time.monotonic() >= deadline:
                 self.on_status(False, err)
                 # Keep trying quietly; the server may still be starting.
@@ -114,7 +115,9 @@ class Engine(threading.Thread):
                 self._pump(api)
             except (OSError, SDKError) as e:
                 self.ready.clear()
-                self.on_status(False, f"lost the OpenRGB server: {e}")
+                lost = ("the controller" if backend_name() == "direct"
+                        else "the OpenRGB server")
+                self.on_status(False, f"lost {lost}: {e}")
                 self.stop_event.wait(2.0)
             finally:
                 api.close()

@@ -1,7 +1,7 @@
 # msi-mystic-light-linux
 
 Control MSI Mystic Light motherboard lighting — case fans, CPU cooler, GPU — from
-Linux. Includes a GTK4 panel and a CLI.
+Linux, and from Windows too. Includes a GTK4 panel and a CLI.
 
 Built for the **MSI PRO Z890-A WIFI (MS-7E32)** on Arch/Omarchy, and written so
 other recent MSI boards can be added by editing one config entry.
@@ -43,14 +43,21 @@ process only**. The system DMI table, the BIOS and every other program are
 untouched, and dropping the environment variable reverts it completely.
 
 Everything then runs through OpenRGB's own SDK, which is upstream-maintained and
-carries the firmware caveats for this controller. This project does not talk to
-the HID device directly for writes.
+carries the firmware caveats for this controller. On Linux this project does not
+talk to the HID device directly for writes.
 
 ```
 msirgb-gui  ─┐
 msirgb play ─┼─▶ effects engine ─▶ OpenRGB SDK ─▶ openrgb --server ─▶ MSI controller
 msirgb CLI  ─┘     (~30 fps)      127.0.0.1:6742   (LD_PRELOAD shim)    (USB HID)
 ```
+
+On Windows that shim is not possible, since OpenRGB reads the board name
+from WMI. So the Windows build skips OpenRGB and sends the controller
+the same HID feature reports OpenRGB would (`msi_rgb/direct.py`). The byte
+sequences were captured from OpenRGB 1.0rc3 driving this board and the direct
+driver reproduces them byte for byte. Only the 761-byte controller (USB
+`0db0:0076`, recent Z890/X870/B850 boards) is handled.
 
 ## Install
 
@@ -69,6 +76,35 @@ the CLI needs nothing beyond the standard library.
 ```bash
 msirgb doctor        # does OpenRGB see the board?
 msirgb list          # zones, LED counts
+```
+
+## Windows
+
+Download `MSI-Mystic-Light-Setup-<version>.exe` from the
+[Releases](https://github.com/Sahildhillon0/msi-mystic-light-linux/releases)
+page (or the *Windows build* workflow's artifacts) and run it. It installs per
+user, needs no administrator rights and does not need OpenRGB. A portable zip
+is built alongside it.
+
+- **MSI Mystic Light** in the Start menu is the panel: the same G HUB-style
+  window as on Linux.
+- `msirgb.exe` in the install folder is the CLI, with the same commands.
+- Lighting is restored at login by a `Run` entry the panel adds. Turn it off
+  in the panel's settings (gear icon) under *Restore lighting at login*.
+- Settings live in `%USERPROFILE%\.config\msi-rgb\`, as on Linux.
+
+Close MSI Center / Mystic Light, SignalRGB and OpenRGB first. They drive the
+same controller, and two programs writing to it make the LEDs flicker.
+
+The build runs on GitHub Actions (`.github/workflows/windows.yml`): GTK4 from
+MSYS2, PyInstaller, then Inno Setup. To build it yourself, run the same steps in
+an MSYS2 UCRT64 shell.
+
+To try the direct driver on Linux, stop OpenRGB first, then:
+
+```bash
+systemctl --user stop openrgb-msi
+MSI_RGB_BACKEND=direct msirgb doctor
 ```
 
 ## Using it

@@ -10,9 +10,11 @@ preview draws the very same frames from the same clock, so what is on screen
 is what is on the fans.
 
 Requires PyGObject with GTK4 and pycairo; no other third-party packages.
+Runs on Linux and, from the PyInstaller build, on Windows.
 """
 
 import math
+import os
 import sys
 import threading
 
@@ -36,7 +38,7 @@ CUSTOM = "Custom"
 CSS = """
 window.ghub, window.ghub.background {
   background: #0d0f13; color: #e6e9ef;
-  font-family: "Inter", "Noto Sans", sans-serif;
+  font-family: "Inter", "Noto Sans", "Segoe UI", sans-serif;
 }
 window.ghub headerbar {
   background: #0a0b0e; border-bottom: 1px solid #1d2129;
@@ -332,6 +334,12 @@ class RGBWindow(Gtk.ApplicationWindow):
         self.fx_cards = {}
         self.zone_rows = []
 
+        if runtime.WINDOWS and self.settings.get("login_restore", True):
+            # On by default, as install.sh makes it on Linux. Rewritten each
+            # start so it follows the exe if the install moves.
+            self.settings["login_restore"] = True
+            runtime.set_login_restore(True)
+
         self.engine = Engine(on_status=self._engine_status, connect_timeout=3)
         self._install_css()
         self._build()
@@ -451,11 +459,19 @@ class RGBWindow(Gtk.ApplicationWindow):
         keep = Gtk.Switch(active=self.settings.get("keep_running", True))
         keep.set_valign(Gtk.Align.CENTER)
         keep.connect("notify::active", self._keep_changed)
-        login = ("on" if runtime.unit_installed()
-                 else "off (re-run install.sh)")
-        note = Gtk.Label(
-            label=f"Restore lighting at login: {login}", xalign=0.0)
-        note.add_css_class("dim")
+        if runtime.WINDOWS:
+            # No installer-managed unit here: the panel owns the Run value.
+            login_sw = Gtk.Switch(active=runtime.unit_installed())
+            login_sw.set_valign(Gtk.Align.CENTER)
+            login_sw.connect("notify::active", self._login_changed)
+            note = hbox(12, Gtk.Label(label="Restore lighting at login",
+                                      xalign=0.0), spacer(), login_sw)
+        else:
+            login = ("on" if runtime.unit_installed()
+                     else "off (re-run install.sh)")
+            note = Gtk.Label(
+                label=f"Restore lighting at login: {login}", xalign=0.0)
+            note.add_css_class("dim")
         reload_btn = Gtk.Button(label="Re-read zones from the board")
         reload_btn.connect("clicked", lambda *_: self._reread())
         box = vbox(10, eyebrow("Settings"),
@@ -1217,6 +1233,13 @@ class RGBWindow(Gtk.ApplicationWindow):
         self.settings["keep_running"] = sw.get_active()
         self._schedule_save()
 
+    def _login_changed(self, sw, _p):
+        on = sw.get_active()
+        self.settings["login_restore"] = on
+        if not runtime.set_login_restore(on):
+            self._set_status("Could not change the login setting", error=True)
+        self._schedule_save()
+
     def _reread(self):
         self.engine.stop()
         self.engine.join(2)
@@ -1334,8 +1357,40 @@ def _self_test():
     return 0 if ok else 1
 
 
+def _screenshot(path):
+    """Open the panel, let it settle, save it as a PNG and quit.
+
+    Needs no board: it shows whatever state the panel reaches (OFFLINE when
+    there is no controller), which is what a build check wants to see.
+    """
+    class _App(Gtk.Application):
+        def do_activate(self):                      # noqa: N802 (GTK API)
+            win = RGBWindow(self)
+            win.present()
+
+            def snap():
+                w, h = win.get_width(), win.get_height()
+                shot = Gtk.Snapshot()
+                Gtk.WidgetPaintable.new(win).snapshot(shot, w, h)
+                node = shot.to_node()
+                renderer = win.get_native().get_renderer()
+                renderer.render_texture(node, None).save_to_png(path)
+                print(f"saved {path} ({w}x{h})")
+                win.shutdown(handoff=False)
+                self.quit()
+                return False
+
+            GLib.timeout_add(4000, snap)
+
+    _App(application_id=APP_ID + ".screenshot").run([])
+    return 0 if os.path.exists(path) else 1
+
+
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
+    if "--screenshot" in argv:
+        i = argv.index("--screenshot")
+        return _screenshot(argv[i + 1] if i + 1 < len(argv) else "panel.png")
     if "--self-test" in argv:
         print("self-test: constructs the panel, reads zones, visits every tab "
               "and clicks the colour picker.")

@@ -1,6 +1,8 @@
 """msirgb -- control MSI Mystic Light motherboard RGB from the command line.
 
-Talks to a running OpenRGB SDK server on 127.0.0.1:6742. Standard library only.
+Talks to a running OpenRGB SDK server on 127.0.0.1:6742 (Linux default), or
+straight to the controller over HID (Windows default; ``MSI_RGB_BACKEND``
+picks either). Standard library only, plus hidapi for the direct backend.
 
 Usage:
   msirgb doctor                                 # diagnose board + detection
@@ -24,12 +26,43 @@ import time
 from .color import DEFAULT_LEDS, cycle, hex_to_rgb, rainbow_gradient, rgb_to_hex
 from .config import (CONFIG_PATH, KNOWN_BOARDS, load_config, read_dmi_board_name,
                      write_example_config, zone_label)
-from .sdk import OpenRGB, SDKError
+from .sdk import OpenRGB, SDKError, backend_name, connect
 from . import effects, runtime, state
+
+
+def cmd_doctor_direct():
+    """Doctor for the direct HID backend: is the controller there and usable?"""
+    from .direct import find_paths
+    print("MSI Mystic Light -- diagnosis (direct HID, no OpenRGB)")
+    print("=" * 46)
+    try:
+        paths = find_paths()
+    except SDKError as e:
+        print(f"  {e}")
+        return 2
+    if not paths:
+        print("  No MSI Mystic Light controller (USB 0db0:0076) found.")
+        print("  This build only drives the 761-byte controller used on recent")
+        print("  MSI boards (Z890, X870, B850 ...).")
+        return 1
+    for p in paths:
+        print(f"  found  {p.decode(errors='replace')}")
+    try:
+        api = connect()
+        api.load_devices()
+    except (OSError, SDKError) as e:
+        print(f"  but it could not be opened: {e}")
+        return 1
+    api.close()
+    print("  OK -- the controller accepted the configuration packet.")
+    print("\nRun `msirgb list` to see the zones.")
+    return 0
 
 
 def cmd_doctor():
     """Explain whether OpenRGB can see this board, and what to do about it."""
+    if backend_name() == "direct":
+        return cmd_doctor_direct()
     cfg = load_config()
     board = read_dmi_board_name()
 
@@ -318,9 +351,8 @@ def cmd_effect(args):
     lighting = state.Lighting({key: layer} if key else {})
     if key is None:
         # Zones are keyed by name; resolve the index once we can see them.
-        api = OpenRGB()
+        api = connect()
         try:
-            api.handshake()
             api.load_devices()
             zones = api.devices[0]["zones"] if api.devices else []
         finally:
@@ -336,7 +368,7 @@ def cmd_effect(args):
 
 def main(argv=None):
     p = argparse.ArgumentParser(
-        prog="msirgb", description="Control MSI Mystic Light RGB via OpenRGB.")
+        prog="msirgb", description="Control MSI Mystic Light RGB.")
     sub = p.add_subparsers(dest="cmd", required=True)
 
     sub.add_parser("doctor", help="diagnose board detection and setup")
@@ -390,7 +422,7 @@ def main(argv=None):
                         "(keeps running while anything is animated)")
     pl.add_argument("--profile", help="apply this profile instead")
     pl.add_argument("--wait", type=float, default=60.0,
-                    help="seconds to wait for the OpenRGB server")
+                    help="seconds to wait for the board to be reachable")
 
     pr = sub.add_parser("profile", help="list profiles, or apply one")
     pr.add_argument("name", nargs="?")
@@ -437,15 +469,17 @@ def main(argv=None):
         return cmd_effect(args)
 
     try:
-        api = OpenRGB()
+        api = connect()
     except OSError as e:
         print(f"cannot reach the OpenRGB server ({e}).", file=sys.stderr)
         print("Start it with: systemctl --user start openrgb-msi",
               file=sys.stderr)
         return 2
+    except SDKError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
 
     try:
-        api.handshake()
         api.load_devices()
 
         if not api.devices:
