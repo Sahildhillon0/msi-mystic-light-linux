@@ -15,6 +15,8 @@ Runs on Linux and, from the PyInstaller build, on Windows.
 
 import math
 import os
+import pathlib
+import subprocess
 import sys
 import threading
 
@@ -24,7 +26,7 @@ gi.require_version("Gtk", "4.0")
 gi.require_version("Gdk", "4.0")
 from gi.repository import Gdk, GLib, Gtk
 
-from . import effects, runtime, state
+from . import diagnose, effects, runtime, state
 from .color import PRESETS, hex_to_rgb, rgb_to_hex
 from .config import default_zone_index, load_config, zone_label
 from .engine import Engine
@@ -58,6 +60,13 @@ window.ghub .pill {
 }
 window.ghub .pill.ok { color: #3ddc97; background: rgba(61,220,151,0.10); }
 window.ghub .pill.bad { color: #ff4d5e; background: rgba(255,77,94,0.12); }
+window.ghub .report, window.ghub .report text {
+  background: #0b0c10; color: #c9d1dc; font-size: 12px;
+}
+window.ghub .report { padding: 10px; border-radius: 8px; }
+window.ghub .verdict { font-weight: 700; }
+window.ghub .verdict.ok { color: #3ddc97; }
+window.ghub .verdict.bad { color: #ff4d5e; }
 
 window.ghub .sidebar { background: #111318; border-right: 1px solid #1d2129; }
 window.ghub .sidebar list { background: transparent; }
@@ -440,6 +449,10 @@ class RGBWindow(Gtk.ApplicationWindow):
         header.pack_end(menu)
         self.conn = Gtk.Label(label="CONNECTING")
         self.conn.add_css_class("pill")
+        self.conn.set_tooltip_text("Click for diagnostics")
+        click = Gtk.GestureClick()
+        click.connect("released", lambda *_: self._open_diagnostics())
+        self.conn.add_controller(click)
         header.pack_end(self.conn)
         return header
 
@@ -474,11 +487,15 @@ class RGBWindow(Gtk.ApplicationWindow):
             note.add_css_class("dim")
         reload_btn = Gtk.Button(label="Re-read zones from the board")
         reload_btn.connect("clicked", lambda *_: self._reread())
+        diag_btn = Gtk.Button(label="Diagnostics…")
+        diag_btn.set_tooltip_text("Check why the board is not responding")
+        diag_btn.connect("clicked", lambda *_: (pop.popdown(),
+                                                self._open_diagnostics()))
         box = vbox(10, eyebrow("Settings"),
                    hbox(12, Gtk.Label(label="Keep effects running after "
                                             "closing", xalign=0.0),
                         spacer(), keep),
-                   note, reload_btn)
+                   note, reload_btn, diag_btn)
         box.set_size_request(320, -1)
         pop.set_child(margins(box, 14))
         return pop
@@ -776,7 +793,9 @@ class RGBWindow(Gtk.ApplicationWindow):
         for c in ("ok", "bad"):
             self.conn.remove_css_class(c)
         self.conn.add_css_class("ok" if ok else "bad")
-        self._set_status(msg, error=not ok)
+        self._set_status(msg if ok else
+                         f"{msg}  —  click OFFLINE for diagnostics",
+                         error=not ok)
         if ok and not self.zones and self.engine.ready.is_set():
             self._on_ready()
         return False
@@ -1248,6 +1267,98 @@ class RGBWindow(Gtk.ApplicationWindow):
         self.engine = Engine(on_status=self._engine_status, connect_timeout=3)
         self.engine.start()
         self._set_status("Re-reading zones from the board...")
+
+    # ---------------------------------------------------------- diagnostics
+    def _open_diagnostics(self):
+        """Run the doctor in a window: no terminal needed to see what's wrong."""
+        if getattr(self, "_diag", None) is not None:
+            self._diag.present()
+            return
+        win = Gtk.Window(title="Diagnostics", transient_for=self, modal=True)
+        win.add_css_class("ghub")
+        win.set_default_size(820, 580)
+        self._diag = win
+        win.connect("close-request", lambda *_: setattr(self, "_diag", None)
+                    or False)
+
+        view = Gtk.TextView(editable=False, cursor_visible=False,
+                            monospace=True, wrap_mode=Gtk.WrapMode.WORD_CHAR)
+        view.add_css_class("report")
+        buf = view.get_buffer()
+        scroll = Gtk.ScrolledWindow(vexpand=True, hexpand=True)
+        scroll.set_child(view)
+
+        intro = Gtk.Label(xalign=0.0, wrap=True, label=(
+            "Checks that the lighting controller can be found and opened, "
+            "then lights every zone white for two seconds. If something "
+            "fails, Copy report and send it along."))
+        intro.add_css_class("dim")
+        verdict = Gtk.Label(xalign=0.0)
+        verdict.add_css_class("verdict")
+        rerun = Gtk.Button(label="Run again")
+        copy = Gtk.Button(label="Copy report")
+        folder = Gtk.Button(label="Open log folder")
+        close = Gtk.Button(label="Close")
+        close.connect("clicked", lambda *_: (win.close()))
+        text = {"value": ""}
+
+        def copy_report(*_):
+            data = GLib.Bytes.new(text["value"].encode("utf-8"))
+            win.get_clipboard().set_content(
+                Gdk.ContentProvider.new_for_bytes(
+                    "text/plain;charset=utf-8", data))
+            copy.set_label("Copied")
+            GLib.timeout_add(1500, lambda: copy.set_label("Copy report")
+                             or False)
+
+        def open_folder(*_):
+            path = state.CONFIG_DIR
+            path.mkdir(parents=True, exist_ok=True)
+            try:
+                if runtime.WINDOWS:
+                    os.startfile(str(path))         # noqa: S606
+                else:
+                    subprocess.Popen(["xdg-open", str(path)])
+            except OSError as e:
+                self._set_status(f"Could not open {path}: {e}", error=True)
+
+        def done(rc, report):
+            text["value"] = report
+            buf.set_text(report)
+            verdict.set_label("Everything checks out." if rc == 0 else
+                              "Found a problem — details below.")
+            for c in ("ok", "bad"):
+                verdict.remove_css_class(c)
+            verdict.add_css_class("ok" if rc == 0 else "bad")
+            for b in (rerun, copy):
+                b.set_sensitive(True)
+            # Hand the board back to the panel.
+            self._reread()
+            return False
+
+        def run(*_):
+            for b in (rerun, copy):
+                b.set_sensitive(False)
+            verdict.set_label("Running checks…")
+            buf.set_text("")
+
+            def work():
+                # The doctor opens the controller itself; the panel's engine
+                # must let go of it first or the two would fight.
+                self.engine.stop()
+                self.engine.join(3)
+                rc, report = diagnose.report()
+                GLib.idle_add(done, rc, report)
+            threading.Thread(target=work, daemon=True).start()
+
+        rerun.connect("clicked", run)
+        copy.connect("clicked", copy_report)
+        folder.connect("clicked", open_folder)
+        box = vbox(10, eyebrow("Diagnostics"), intro, verdict, scroll,
+                   hbox(8, rerun, copy, folder, spacer(), close))
+        win.set_child(margins(box, 16))
+        win.present()
+        run()
 
     # ------------------------------------------------------------ shutdown
     def shutdown(self, handoff=True):
