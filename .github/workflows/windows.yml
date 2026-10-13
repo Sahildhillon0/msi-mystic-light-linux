@@ -14,6 +14,7 @@ on:
 jobs:
   build:
     runs-on: windows-latest
+    timeout-minutes: 25
     permissions:
       contents: write
     defaults:
@@ -71,7 +72,10 @@ jobs:
           ./"MSI Mystic Light.exe" --screenshot "$GITHUB_WORKSPACE/panel.png" &
           pid=$!
           for i in $(seq 60); do [ -f "$GITHUB_WORKSPACE/panel.png" ] && break; sleep 1; done
-          wait $pid || true
+          sleep 3
+          kill $pid 2>/dev/null || true
+          echo "--- panel log ---"
+          cat "$USERPROFILE/.config/msi-rgb/msirgb.log" 2>/dev/null || true
           test -s "$GITHUB_WORKSPACE/panel.png"
 
       - name: Portable zip

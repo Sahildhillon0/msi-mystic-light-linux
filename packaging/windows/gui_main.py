@@ -12,6 +12,7 @@ from msi_rgb.engine import log
 def _excepthook(kind, value, tb):
     # Windowed exe: no console, so an uncaught error would vanish silently.
     log("uncaught: " + "".join(traceback.format_exception(kind, value, tb)))
+    sys.__excepthook__(kind, value, tb)
 
 
 sys.excepthook = _excepthook

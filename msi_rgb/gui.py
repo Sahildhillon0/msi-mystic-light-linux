@@ -1480,6 +1480,15 @@ def _screenshot(path):
             win.present()
 
             def snap():
+                try:
+                    return _snap()
+                except Exception:                    # noqa: BLE001
+                    import traceback
+                    traceback.print_exc()
+                    self.quit()
+                    return False
+
+            def _snap():
                 w, h = win.get_width(), win.get_height()
                 shot = Gtk.Snapshot()
                 Gtk.WidgetPaintable.new(win).snapshot(shot, w, h)
@@ -1493,6 +1502,12 @@ def _screenshot(path):
 
             GLib.timeout_add(4000, snap)
 
+    def watchdog():
+        # A build check must fail, never hang: give up after 45 s.
+        if not os.path.exists(path):
+            print("screenshot: timed out", file=sys.stderr, flush=True)
+            os._exit(3)
+    threading.Timer(45, watchdog).start()
     _App(application_id=APP_ID + ".screenshot").run([])
     return 0 if os.path.exists(path) else 1
 
